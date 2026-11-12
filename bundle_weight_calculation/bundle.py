@@ -39,16 +39,52 @@ def _get_return_source_info(row):
 	return 1, flt(values.get(ITEM_WEIGHT))
 
 
+def _get_delivery_note_info(row):
+	"""For rows billed from a Delivery Note, take the weight entered on the Delivery Note row.
+
+	Is-Bundle still comes from the Item master; only the weight is overridden. Returns None
+	when the row has no Delivery Note link, the DN row has no positive weight, or the item
+	is not a bundle item.
+	"""
+	source = row.get("dn_detail")
+	if not source:
+		return None
+	values = frappe.db.get_value("Delivery Note Item", source, ["item_code", ITEM_WEIGHT], as_dict=True)
+	if not values or values.item_code != row.item_code:
+		return None
+	weight = flt(values.get(ITEM_WEIGHT))
+	if weight <= 0:
+		return None
+	is_bundle, _item_weight = get_item_bundle_info(row.item_code)
+	if not is_bundle:
+		return None
+	return 1, weight
+
+
+@frappe.whitelist()
+def get_row_bundle_info(item_code=None, dn_detail=None):
+	"""Client helper: (is_bundle, weight) for a Sales Invoice row, using the same order as the
+	server (Delivery Note row weight, then Item master). Child tables can't be read directly
+	from the browser, hence this method."""
+	frappe.has_permission("Sales Invoice", "read", throw=True)
+	row = frappe._dict(item_code=item_code, dn_detail=dn_detail)
+	info = _get_delivery_note_info(row) or get_item_bundle_info(item_code)
+	return {ITEM_FLAG: info[0], ITEM_WEIGHT: info[1]}
+
+
 def resolve_bundle_rows(doc):
 	"""Refresh the bundle snapshot on every item row and validate it.
 
-	Never trusts values supplied by the client / API payload: they are always overwritten
-	from the Item master (or, for returns, from the original invoice row).
+	Never trusts values supplied by the client / API payload: they are always overwritten.
+	Weight source, in order: original invoice row (returns), linked Delivery Note row,
+	Item master (fallback).
 	"""
 	for row in doc.get("items") or []:
 		info = None
 		if doc.get("is_return"):
 			info = _get_return_source_info(row)
+		if info is None:
+			info = _get_delivery_note_info(row)
 		if info is None:
 			info = get_item_bundle_info(row.item_code)
 		is_bundle, weight = info
@@ -57,7 +93,8 @@ def resolve_bundle_rows(doc):
 			frappe.throw(
 				_(
 					"Row #{0}: Item {1} is marked as a Bundle item but its Bundle Weight (KG) is "
-					"missing, zero or negative ({2}). Please set a positive Bundle Weight (KG) in the Item master."
+					"missing, zero or negative ({2}). Please set a positive Bundle Weight (KG) on the Delivery Note "
+					"item row (or in the Item master for invoices without a Delivery Note)."
 				).format(row.idx, frappe.bold(row.item_code), flt(weight)),
 				title=_("Invalid Bundle Weight"),
 			)

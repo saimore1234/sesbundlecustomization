@@ -65,6 +65,18 @@ def setup_custom_fields():
 		),
 	]
 
+	# Delivery Note row weight (source of truth for invoices billed from a Delivery Note).
+	# Already exists on the cloud site; created here only when missing (update=False).
+	fields["Delivery Note Item"] = [
+		dict(
+			fieldname="custom_bundle_weight_kg",
+			label="Bundle Weight (KG)",
+			fieldtype="Float",
+			insert_after="item_name",
+		),
+	]
+
 	create_custom_fields(fields, update=False)
+	frappe.clear_cache(doctype="Delivery Note Item")
 	frappe.clear_cache(doctype="Item")
 	frappe.clear_cache(doctype="Sales Invoice Item")

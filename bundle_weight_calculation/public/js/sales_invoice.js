@@ -46,6 +46,33 @@
 	};
 })();
 
+// Rows created from a Delivery Note ("Create > Sales Invoice") arrive without the weight being
+// resolved. Fill it from the Delivery Note row, then recalculate, so the user sees the right
+// amount before saving (the server re-resolves on save regardless).
+frappe.ui.form.on("Sales Invoice", {
+	onload_post_render(frm) {
+		if (!frm.is_new() || frm.doc.docstatus !== 0) return;
+		const rows = (frm.doc.items || []).filter((r) => r.dn_detail && r.item_code);
+		if (!rows.length) return;
+		Promise.all(
+			rows.map((r) =>
+				frappe
+					.xcall("bundle_weight_calculation.bundle.get_row_bundle_info", {
+						item_code: r.item_code,
+						dn_detail: r.dn_detail,
+					})
+					.then((m) => {
+						r.custom_is_bundle = cint(m.custom_is_bundle);
+						r.custom_bundle_weight_kg = flt(m.custom_bundle_weight_kg);
+					})
+			)
+		).then(() => {
+			frm.refresh_field("items");
+			frm.cscript.calculate_taxes_and_totals();
+		});
+	},
+});
+
 frappe.ui.form.on("Sales Invoice Item", {
 	item_code(frm, cdt, cdn) {
 		const row = locals[cdt][cdn];
@@ -53,18 +80,21 @@ frappe.ui.form.on("Sales Invoice Item", {
 			frappe.model.set_value(cdt, cdn, { custom_is_bundle: 0, custom_bundle_weight_kg: 0 });
 			return;
 		}
-		// Re-read the Item master every time the item is (re)selected.
-		frappe.db
-			.get_value("Item", row.item_code, ["custom_is_bundle", "custom_bundle_weight_kg"])
-			.then(({ message }) => {
-				const is_bundle = cint(message && message.custom_is_bundle);
-				const weight = flt(message && message.custom_bundle_weight_kg);
+		// Delivery Note row weight when linked, otherwise the Item master (server decides).
+		frappe
+			.xcall("bundle_weight_calculation.bundle.get_row_bundle_info", {
+				item_code: row.item_code,
+				dn_detail: row.dn_detail,
+			})
+			.then((message) => {
+				const is_bundle = cint(message.custom_is_bundle);
+				const weight = flt(message.custom_bundle_weight_kg);
 				if (is_bundle && weight <= 0) {
 					frappe.msgprint({
 						title: __("Invalid Bundle Weight"),
 						indicator: "red",
 						message: __(
-							"Item {0} is marked as a Bundle item but its Bundle Weight (KG) is missing, zero or negative. Set it in the Item master.",
+							"Item {0} is marked as a Bundle item but its Bundle Weight (KG) is missing, zero or negative. Set it on the Delivery Note item row (or in the Item master if there is no Delivery Note).",
 							[row.item_code.bold()]
 						),
 					});
