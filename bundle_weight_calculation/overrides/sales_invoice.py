@@ -54,3 +54,21 @@ class BundleSalesInvoice(SalesInvoice):
 	def calculate_taxes_and_totals(self):
 		resolve_bundle_rows(self)
 		BundleTaxesAndTotals(self)
+
+	def get_billing_reference_details(self, reference_names, reference_doctype, based_on):
+		"""Over-billing check: the Delivery Note / Sales Order row amount is Qty x Rate, while a
+		bundle invoice row is Qty x Rate x Weight. Scale the reference amount by the weight of
+		the invoice row(s) that point at it so a correct bundle invoice is not flagged as
+		over-billed. Over-billing beyond the allowance is still caught."""
+		details = super().get_billing_reference_details(reference_names, reference_doctype, based_on)
+		join_field = "dn_detail" if reference_doctype.startswith("Delivery Note") else "so_detail"
+		weights = {}
+		for row in self.get("items") or []:
+			key = row.get(join_field)
+			weight = get_row_weight(row)
+			if key and weight:
+				weights[key] = weight
+		for key, weight in weights.items():
+			if key in details:
+				details[key] = flt(details[key]) * weight
+		return details
